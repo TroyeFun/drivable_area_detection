@@ -1,20 +1,34 @@
+import cv2
 from imap.lib.convertor import Opendrive2Apollo
 from imap.lib.opendrive.map import Map
 from imap import global_var
 import matplotlib.pyplot as plt
+from matplotlib import colors
 import numpy as np
+from tqdm import tqdm
 
-lane_type_to_color = {
+
+LANE_TYPE_TO_COLOR = {
     'driving': 'lightcoral',
     'shoulder': 'black',
     'sidewalk': 'skyblue',
     'median': 'springgreen',
     'none': 'yellow',
 }
+VEHICLE_BOX_SIZE = (2.433, 1.5)  # length, width
+MAP_ORIGIN_ODR = (-130, 80)  # x, y (in odr coordinate)
+MAP_ORIGIN_CARLA = (MAP_ORIGIN_ODR[0], -MAP_ORIGIN_ODR[1])  # x, y (in carla coordinate)
+MAP_RANGE = ((MAP_ORIGIN_CARLA[0], MAP_ORIGIN_CARLA[0] + 250),
+             (MAP_ORIGIN_CARLA[1], MAP_ORIGIN_CARLA[1] + 250))  # ((min_x, max_x), (min_y, max_y))  in carla coordinate
 
-def draw_lanes(xodr_map: Map):
+
+def draw_lanes(xodr_map: Map, invert_y=True):
     plt.clf()
+    if invert_y:
+        plt.gca().invert_yaxis()
+
     for road_id, road in xodr_map.roads.items():
+        assert not road.reference_line
         road.generate_reference_line()
         road.add_offset_to_reference_line()
         road.add_origin_to_reference_line(0.0, 0.0)
@@ -27,22 +41,101 @@ def draw_lanes(xodr_map: Map):
                 left_y = [p.y for p in lane.left_boundary]
                 right_x = [p.x for p in lane.right_boundary]
                 right_y = [p.y for p in lane.right_boundary]
-                polygon_x = left_x + right_x[::-1] + left_x[0:1]
-                polygon_y = left_y + right_y[::-1] + left_y[0:1]
-                plt.fill(polygon_x, polygon_y, c=lane_type_to_color[lane.lane_type])
+                polygon_x = np.array(left_x + right_x[::-1] + left_x[0:1])
+                polygon_y = np.array(left_y + right_y[::-1] + left_y[0:1])
+                if invert_y:
+                    polygon_y = -polygon_y
+                plt.fill(polygon_x, polygon_y, c=LANE_TYPE_TO_COLOR[lane.lane_type])
                 plt.plot(polygon_x, polygon_y, c='gray')
                 print(road_id, '---', lane.lane_id, '---', lane.lane_type, '---', len(lane.left_boundary))
     # xs = np.arange(-150, 150, 10)
     # ys = np.arange(-150, 80, 10)
     # plt.xticks(xs)
     # plt.yticks(ys)
-    for lane_type, color in lane_type_to_color.items():
+    for lane_type, color in LANE_TYPE_TO_COLOR.items():
         plt.scatter([], [], c=color, label=lane_type)
     plt.legend()
     plt.grid(True)
-    plt.show()
-    import ipdb; ipdb.set_trace()
-    
+    # plt.show()
+    plt.savefig('drivable_area.png', dpi=300)
+
+
+def draw_lanes_cv2(xodr_map: Map, resolution=0.1):
+    canvas = np.ones((int((MAP_RANGE[1][1] - MAP_RANGE[1][0]) / resolution),
+                      int((MAP_RANGE[0][1] - MAP_RANGE[0][0]) / resolution),
+                      3), dtype=np.uint8) * 255
+    for road_id, road in xodr_map.roads.items():
+        assert not road.reference_line
+        road.generate_reference_line()
+        road.add_offset_to_reference_line()
+        road.add_origin_to_reference_line(0.0, 0.0)
+        road.process_lanes()
+        for lane_section in road.lanes.lane_sections:
+            for lane in lane_section.left + lane_section.right:
+                # if lane.lane_type != 'driving':
+                #     continue
+                left_x = [p.x for p in lane.left_boundary]
+                left_y = [p.y for p in lane.left_boundary]
+                right_x = [p.x for p in lane.right_boundary]
+                right_y = [p.y for p in lane.right_boundary]
+                polygon_x = np.array(left_x + right_x[::-1])
+                polygon_y = np.array(left_y + right_y[::-1])
+                polygon_y = -polygon_y  # invert y (odr coordinate to carla coordinate)
+                polygon = np.stack([polygon_x, polygon_y], axis=1)
+                pixels = ((polygon - MAP_ORIGIN_CARLA) / resolution).astype(np.int32)
+                color = (np.array(colors.to_rgb(LANE_TYPE_TO_COLOR[lane.lane_type])) * 255).astype(
+                    np.int32).tolist()[::-1]
+                cv2.fillPoly(canvas, [pixels], color)
+                cv2.polylines(canvas, [pixels], True, (0, 0, 0), thickness=1)
+                print(road_id, '---', lane.lane_id, '---', lane.lane_type, '---', len(lane.left_boundary))
+    cv2.imwrite('drivable_area_cv2.png', canvas)
+    return canvas
+
+
+def draw_vehicle(transform_matrix, box_size=VEHICLE_BOX_SIZE):
+    transform_matrix = np.array(transform_matrix)
+    corners = np.array([
+        [box_size[0] / 2, box_size[1] / 2, 0],
+        [box_size[0] / 2, -box_size[1] / 2, 0],
+        [-box_size[0] / 2, -box_size[1] / 2, 0],
+        [-box_size[0] / 2, box_size[1] / 2, 0],
+    ])
+    corners = corners @ transform_matrix[:3, :3].T + transform_matrix[:3, 3].T
+    plt.fill(corners[:, 0], corners[:, 1], c='red', alpha=0.5)
+    # plt.savefig('drivable_area.png', dpi=300)
+
+
+def draw_vehicle_cv2(canvas, transform_matrix, resolution=0.1, box_size=VEHICLE_BOX_SIZE):
+    transform_matrix = np.array(transform_matrix)
+    corners = np.array([
+        [box_size[0] / 2, box_size[1] / 2, 0],
+        [box_size[0] / 2, -box_size[1] / 2, 0],
+        [-box_size[0] / 2, -box_size[1] / 2, 0],
+        [-box_size[0] / 2, box_size[1] / 2, 0],
+    ])
+    corners = corners @ transform_matrix[:3, :3].T + transform_matrix[:3, 3].T
+    pixels = ((corners[:, :2] - MAP_ORIGIN_CARLA) / resolution).astype(np.int32)
+    cv2.fillPoly(canvas, [pixels], (0, 0, 255))
+
+
+def draw_carla_spawn_points():
+    import carla
+    cli = carla.Client('localhost', 2000)
+    world = cli.get_world()
+    points = world.get_map().get_spawn_points()
+    for point in tqdm(points):
+        draw_vehicle(point.get_matrix())
+    plt.savefig('drivable_area_spawn_points.png', dpi=300)
+
+
+def draw_carla_spawn_points_cv2(canvas, resolution=0.1):
+    import carla
+    cli = carla.Client('localhost', 2000)
+    world = cli.get_world()
+    points = world.get_map().get_spawn_points()
+    for point in tqdm(points):
+        draw_vehicle_cv2(canvas, point.get_matrix(), resolution)
+    cv2.imwrite('drivable_area_spawn_points_cv2.png', canvas)
 
 
 if __name__ == '__main__':
@@ -50,10 +143,16 @@ if __name__ == '__main__':
     global_var.set_element_vaule('sampling_length', 0.1)
 
     path = '/home/robot/hongyu/ws/carla-export-data/Town10HD_Opt.xodr'
-    xodr_map = Map()
-    xodr_map.load(path)
-    opendrive2apollo = Opendrive2Apollo(path)
-    opendrive2apollo.set_parameters(False)
+    # opendrive2apollo = Opendrive2Apollo(path)
+    # opendrive2apollo.set_parameters(False)
     # opendrive2apollo.convert()
 
-    draw_lanes(xodr_map)
+    xodr_map = Map()
+    xodr_map.load(path)
+    draw_lanes(xodr_map, invert_y=True)
+    draw_carla_spawn_points()
+
+    xodr_map = Map()
+    xodr_map.load(path)
+    canvas = draw_lanes_cv2(xodr_map, resolution=0.1)
+    draw_carla_spawn_points_cv2(canvas, resolution=0.1)
