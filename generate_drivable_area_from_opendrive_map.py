@@ -57,7 +57,7 @@ def draw_lanes(xodr_map: Map, invert_y=True):
     plt.legend()
     plt.grid(True)
     # plt.show()
-    plt.savefig('drivable_area.png', dpi=300)
+    plt.savefig('test_data/drivable_area.png', dpi=300)
 
 
 def draw_lanes_cv2(xodr_map: Map, resolution=0.1):
@@ -88,7 +88,7 @@ def draw_lanes_cv2(xodr_map: Map, resolution=0.1):
                 cv2.fillPoly(canvas, [pixels], color)
                 cv2.polylines(canvas, [pixels], True, (0, 0, 0), thickness=1)
                 print(road_id, '---', lane.lane_id, '---', lane.lane_type, '---', len(lane.left_boundary))
-    cv2.imwrite('drivable_area_cv2.png', canvas)
+    cv2.imwrite('test_data/drivable_area_cv2.png', canvas)
     return canvas
 
 
@@ -102,7 +102,7 @@ def draw_vehicle(transform_matrix, box_size=VEHICLE_BOX_SIZE):
     ])
     corners = corners @ transform_matrix[:3, :3].T + transform_matrix[:3, 3].T
     plt.fill(corners[:, 0], corners[:, 1], c='red', alpha=0.5)
-    # plt.savefig('drivable_area.png', dpi=300)
+    # plt.savefig('test_data/drivable_area.png', dpi=300)
 
 
 def draw_vehicle_cv2(canvas, transform_matrix, resolution=0.1, box_size=VEHICLE_BOX_SIZE):
@@ -125,7 +125,7 @@ def draw_carla_spawn_points():
     points = world.get_map().get_spawn_points()
     for point in tqdm(points):
         draw_vehicle(point.get_matrix())
-    plt.savefig('drivable_area_spawn_points.png', dpi=300)
+    plt.savefig('test_data/drivable_area_spawn_points.png', dpi=300)
 
 
 def draw_carla_spawn_points_cv2(canvas, resolution=0.1):
@@ -135,14 +135,14 @@ def draw_carla_spawn_points_cv2(canvas, resolution=0.1):
     points = world.get_map().get_spawn_points()
     for point in tqdm(points):
         draw_vehicle_cv2(canvas, point.get_matrix(), resolution)
-    cv2.imwrite('drivable_area_spawn_points_cv2.png', canvas)
+    cv2.imwrite('test_data/drivable_area_spawn_points_cv2.png', canvas)
 
 
 if __name__ == '__main__':
     global_var._init()
     global_var.set_element_vaule('sampling_length', 0.1)
 
-    path = '/home/robot/hongyu/ws/carla-export-data/Town10HD_Opt.xodr'
+    path = 'test_data/Town10HD_Opt.xodr'
     # opendrive2apollo = Opendrive2Apollo(path)
     # opendrive2apollo.set_parameters(False)
     # opendrive2apollo.convert()
