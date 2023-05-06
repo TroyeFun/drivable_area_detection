@@ -112,6 +112,13 @@ def abs_slope_check(mesh, tid, max_slope_rad):
     return slope_rad <= max_slope_rad
 
 
+def rel_slope_check(mesh, tid1, tid2, max_slope_rad):
+    normal1 = mesh.triangle_normals[tid1]
+    normal2 = mesh.triangle_normals[tid2]
+    slope_rad = np.arccos(np.dot(normal1, normal2))
+    return slope_rad <= max_slope_rad
+
+
 def degree2rad(degree):
     return np.pi * degree / 180
 
@@ -138,6 +145,8 @@ def detect_ground(mesh, start_point, max_abs_slope_angle, max_rel_slope_angle):
             if drivable_trgs[neigh_tid]:
                 continue
             if not abs_slope_check(mesh, neigh_tid, max_abs_slope_rad):
+                continue
+            if not rel_slope_check(mesh, tid, neigh_tid, max_rel_slope_rad):
                 continue
             queue.append(neigh_tid)
             drivable_trgs[neigh_tid] = True
