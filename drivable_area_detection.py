@@ -1,3 +1,6 @@
+import os
+import time
+
 import matplotlib.pyplot as plt
 import numpy as np
 import open3d as o3d
@@ -6,15 +9,18 @@ from open3d.visualization import draw_geometries
 
 
 def preprocess_mesh(mesh):
-    mesh.compute_vertex_normals()
+    mesh = TM(mesh)
     # mesh = mesh.simplify_quadric_decimation(int(len(mesh.triangles) * 0.1))
-    mesh = mesh.filter_smooth_laplacian(10)
+    mesh = mesh.filter_smooth_laplacian(20)
     mesh.remove_degenerate_triangles()
     mesh.remove_duplicated_triangles()
     mesh.remove_duplicated_vertices()
-    mesh.remove_non_manifold_edges()
+    # mesh.remove_non_manifold_edges()
+    mesh.compute_vertex_normals()
+    # mesh.compute_triangle_normals()
     if not mesh.has_vertex_colors():
         mesh.paint_uniform_color([0.5, 0.5, 0.5])
+    return mesh
 
 
 def detect_drivable_area_from_pcd(pcd, voxel_size):
@@ -123,7 +129,7 @@ def degree2rad(degree):
     return np.pi * degree / 180
 
 
-def detect_ground(mesh, start_point, max_abs_slope_angle, max_rel_slope_angle):
+def detect_ground(mesh, start_point, max_abs_slope_angle, max_rel_slope_angle, paint=True):
     mesh = TM(mesh)
     trg_adj_list = get_triangle_adjacency(mesh)
     tri_centers = get_triangle_centers(mesh)
@@ -137,10 +143,13 @@ def detect_ground(mesh, start_point, max_abs_slope_angle, max_rel_slope_angle):
     start_tid = np.argmin(dist_to_start)
     queue = [start_tid]
     drivable_trgs[start_tid] = True
+    bfs_seq = []
     while queue:
         tid = queue[0]
         queue = queue[1:]
-        paint_triangle(mesh, tid)
+        if paint:
+            paint_triangle(mesh, tid)
+        bfs_seq.append(tid)
         for neigh_tid in trg_adj_list[tid]:
             if drivable_trgs[neigh_tid]:
                 continue
@@ -150,7 +159,60 @@ def detect_ground(mesh, start_point, max_abs_slope_angle, max_rel_slope_angle):
                 continue
             queue.append(neigh_tid)
             drivable_trgs[neigh_tid] = True
-    return mesh, drivable_trgs
+    return mesh, drivable_trgs, bfs_seq
+
+
+def paint_mesh_incrementally(mesh, bfs_seq):
+    """Copy the following text to clipboard, and paste it in the console of Open3D Visualizer
+    {
+	"class_name" : "ViewTrajectory",
+	"interval" : 29,
+	"is_loop" : false,
+	"trajectory" : 
+	[
+		{
+			"boundingbox_max" : [ 51.0, 25.399999999999999, 4.2000000000000002 ],
+			"boundingbox_min" : [ -0.059999999999999998, -18.800774000000001, -2.0 ],
+			"field_of_view" : 60.0,
+			"front" : [ -0.90763089025171184, -0.057936705080019447, 0.415751735132105 ],
+			"lookat" : [ 24.626496372118194, 0.68516761492840161, -5.7363715400712492 ],
+			"up" : [ 0.40881059807817505, 0.10283041080047317, 0.90680747764537706 ],
+			"zoom" : 0.33999999999999964
+		}
+	],
+	"version_major" : 1,
+	"version_minor" : 0
+    }
+    """
+    vis = o3d.visualization.VisualizerWithKeyCallback()
+    vis.create_window()
+    mesh = TM(mesh)
+    vis.add_geometry(mesh)
+    vis.poll_events()
+    vis.update_renderer()
+
+    print('paste the text')
+    time.sleep(3)
+    vis.poll_events()
+    vis.update_renderer()
+
+    img_cnt = 0
+    save_dir = 'test_data/drivable_painting'
+    os.makedirs(save_dir, exist_ok=True)
+    try:
+        for i, tid in enumerate(bfs_seq):
+            paint_triangle(mesh, tid)
+            if i % 10000 == 0:
+                vis.update_geometry(mesh)
+                vis.poll_events()
+                vis.update_renderer()
+                vis.capture_screen_image("{}/{}.png".format(save_dir, img_cnt))
+                img_cnt += 1
+    except KeyboardInterrupt:
+        pass
+    vis.destroy_window()
+    return mesh
+
 
 
 if __name__ == "__main__":
@@ -158,19 +220,23 @@ if __name__ == "__main__":
     drive_dist_thrd = 0.3
     max_abs_slope_angle = 25  # in degree
     max_rel_slope_angle = 40  # in degree
-    start_point = np.array([9, 0, -1.5])
+
+    # raw_mesh = o3d.io.read_triangle_mesh("test_data/000038.ply")
+    # start_point = np.array([8, 0, -1.5])  # 000038.ply
+    raw_mesh = o3d.io.read_triangle_mesh("test_data/00203.ply")
+    start_point = np.array([0, 8, -1.5])  # 00203.ply
 
     origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
-    mesh = o3d.io.read_triangle_mesh("test_data/000038.ply")
-    preprocess_mesh(mesh)
+    mesh = preprocess_mesh(raw_mesh)
 
     # pcd = mesh.sample_points_poisson_disk(10000)
     # detect_drivable_area_from_pcd(pcd, distance_threshold)
 
-    plane_model = get_ground_plane_from_mesh(mesh, ransac_dist_thrd, drive_dist_thrd)
+    # plane_model = get_ground_plane_from_mesh(mesh, ransac_dist_thrd, drive_dist_thrd)
     # plane_model = [0.00255629, -0.02898346,  0.99957662,  1.57113454]
     # mesh_painted = paint_plane(mesh, plane_model, drive_dist_thrd)
     # o3d.visualization.draw_geometries([mesh_painted, origin])
-    mesh, drivable_trgs = detect_ground(mesh, start_point, max_abs_slope_angle, max_rel_slope_angle)
+    mesh, drivable_trgs, bfs_seq = detect_ground(mesh, start_point, max_abs_slope_angle, max_rel_slope_angle, paint=True)
+    mesh = paint_mesh_incrementally(raw_mesh, bfs_seq)
     draw_geometries([mesh, origin])
     import ipdb; ipdb.set_trace()
